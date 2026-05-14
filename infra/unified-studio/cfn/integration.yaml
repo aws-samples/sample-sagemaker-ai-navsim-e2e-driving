@@ -1,0 +1,76 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SageMaker Unified Studio integration - RAM share and DataZone data source
+  for connecting sagemaker-ai-ml-pipeline resources to Unified Studio.
+
+Parameters:
+  DomainId:
+    Type: String
+    Description: SageMaker Unified Studio (DataZone) domain ID
+
+  ProjectId:
+    Type: String
+    Description: SageMaker Unified Studio (DataZone) project ID
+
+  ConnectionId:
+    Type: String
+    Description: DataZone connection ID (auto-detected by setup script)
+
+  ProjectName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Project name used as prefix for resource naming
+
+Resources:
+  # ============================================================
+  # RAM Resource Share
+  # ============================================================
+  # SageMaker と DataZone の信頼関係を確立する。
+  # SageMaker service principal に DataZone ドメインへのアクセスを許可する。
+  RAMResourceShare:
+    Type: AWS::RAM::ResourceShare
+    Properties:
+      Name: !Sub "DataZone-${DomainId}-SageMaker"
+      ResourceArns:
+        - !Sub "arn:aws:datazone:${AWS::Region}:${AWS::AccountId}:domain/${DomainId}"
+      Principals:
+        - "sagemaker.amazonaws.com"
+      Sources:
+        - !Ref AWS::AccountId
+      PermissionArns:
+        - "arn:aws:ram::aws:permission/AWSRAMSageMakerServicePrincipalPermissionAmazonDataZoneDomain"
+
+  # ============================================================
+  # DataZone Data Source
+  # ============================================================
+  # Model Package Group を Unified Studio の Model Registry に連携する。
+  # DataZone data source が SageMaker の Model Package Group を定期的にスキャンし、
+  # Unified Studio プロジェクトに同期する。
+  DataZoneDataSource:
+    Type: AWS::DataZone::DataSource
+    DependsOn: RAMResourceShare
+    Properties:
+      Name: !Sub "${ProjectName}-datasource"
+      DomainIdentifier: !Ref DomainId
+      ProjectIdentifier: !Ref ProjectId
+      ConnectionIdentifier: !Ref ConnectionId
+      Type: SAGEMAKER
+      Description: !Sub "${ProjectName} の Model Package Group を Unified Studio に連携"
+      EnableSetting: ENABLED
+      PublishOnImport: true
+      Configuration:
+        SageMakerRunConfiguration:
+          TrackingAssets:
+            SageMakerModelPackageGroupAssetType:
+              - !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:model-package-group/${ProjectName}-model-group"
+
+Outputs:
+  RAMResourceShareArn:
+    Description: RAM Resource Share ARN
+    Value: !GetAtt RAMResourceShare.Arn
+
+  DataSourceId:
+    Description: DataZone Data Source ID
+    Value: !Ref DataZoneDataSource

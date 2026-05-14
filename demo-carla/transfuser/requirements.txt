@@ -1,0 +1,8 @@
+carla==0.9.16
+torch
+torchvision
+timm
+numpy
+opencv-python
+boto3
+scipy

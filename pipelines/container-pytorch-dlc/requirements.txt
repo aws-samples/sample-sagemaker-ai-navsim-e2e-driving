@@ -1,0 +1,14 @@
+# Train / Evaluate 両ステップで AWS マネージドコンテナに追加インストールするパッケージ。
+# source_dir に requirements.txt を置くと、コンテナ起動時に自動で pip install される。
+# Train: PyTorch Estimator が source_dir を S3 経由でコンテナに注入する。
+# Evaluate: PyTorchProcessor が source_dir を指定して同様にインストールする。
+# 参照: https://docs.aws.amazon.com/sagemaker/latest/dg/processing-job-frameworks-pytorch.html
+#
+# mlflow: MLflow App (MLflow 3.4) に対応するクライアントバージョン。
+# sagemaker-mlflow プラグインが MLflow App への接続を処理する。
+mlflow>=3.0
+sagemaker-mlflow
+scikit-learn
+pandas
+numpy
+pyarrow>=4.0.0,<16

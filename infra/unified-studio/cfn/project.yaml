@@ -1,0 +1,119 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SageMaker Unified Studio project - ProjectProfile (with MLflowApp) and Project.
+  EnvironmentBlueprintConfiguration is not supported in CFn for V2 managed blueprints,
+  so it is configured via API in deploy-project.sh.
+  Requires the foundation stack (Domain) to be deployed first.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Project name used as prefix for resource naming
+
+  DomainId:
+    Type: String
+    Description: Unified Studio (DataZone) domain ID (from foundation stack)
+
+  ToolingBlueprintId:
+    Type: String
+    Description: Tooling blueprint ID (retrieved by deploy-project.sh)
+
+  MLflowAppBlueprintId:
+    Type: String
+    Description: MLflowApp blueprint ID (retrieved by deploy-project.sh)
+
+  LakehouseCatalogBlueprintId:
+    Type: String
+    Description: LakehouseCatalog blueprint ID (retrieved by deploy-project.sh)
+
+  UnifiedStudioProjectName:
+    Type: String
+    Default: ml-pipeline
+    Description: Name of the Unified Studio project (displayed in Unified Studio UI)
+
+  UnifiedStudioProjectDescription:
+    Type: String
+    Default: SageMaker AI ML Pipeline project
+    Description: Description of the Unified Studio project
+
+Resources:
+  # ============================================================
+  # ProjectProfile
+  # ============================================================
+  # Tooling (ON_CREATE) + LakehouseCatalog (ON_CREATE) + MLflowApp (ON_DEMAND) を含むプロファイル。
+  # MLflowApp は ON_DEMAND にして、既存の MLflow App を後から接続する想定。
+  # このプロファイルで作成されたプロジェクトには AI/ML セクションが表示される。
+  #
+  # 前提: deploy-project.sh が EnvironmentBlueprintConfiguration を
+  #       API 経由で事前に設定済みであること。
+  #
+  # 出典: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-datazone-projectprofile.html
+  ProjectProfile:
+    Type: AWS::DataZone::ProjectProfile
+    Properties:
+      Name: !Sub '${ProjectName}-profile'
+      Description: !Sub '${ProjectName} project profile with Tooling and MLflowApp'
+      DomainIdentifier: !Ref DomainId
+      Status: ENABLED
+      EnvironmentConfigurations:
+        - Name: Tooling
+          EnvironmentBlueprintId: !Ref ToolingBlueprintId
+          DeploymentMode: ON_CREATE
+          DeploymentOrder: 0
+          Description: IDE and development tools
+          AwsAccount:
+            AwsAccountId: !Ref AWS::AccountId
+          AwsRegion:
+            RegionName: !Ref AWS::Region
+          ConfigurationParameters:
+            ParameterOverrides:
+              - Name: enableSpaces
+                Value: 'true'
+                IsEditable: false
+        - Name: MLflowApp
+          EnvironmentBlueprintId: !Ref MLflowAppBlueprintId
+          DeploymentMode: ON_DEMAND
+          Description: MLflow App for experiment tracking
+          AwsAccount:
+            AwsAccountId: !Ref AWS::AccountId
+          AwsRegion:
+            RegionName: !Ref AWS::Region
+        - Name: LakehouseCatalog
+          EnvironmentBlueprintId: !Ref LakehouseCatalogBlueprintId
+          DeploymentMode: ON_CREATE
+          DeploymentOrder: 1
+          Description: Lakehouse catalog for data management
+          AwsAccount:
+            AwsAccountId: !Ref AWS::AccountId
+          AwsRegion:
+            RegionName: !Ref AWS::Region
+
+  # ============================================================
+  # DataZone Project
+  # ============================================================
+  # ProjectProfile を指定してプロジェクトを作成する。
+  # Tooling 環境が ON_CREATE で自動デプロイされ、
+  # MLflowApp は Compute ページから ON_DEMAND で追加可能。
+  #
+  # 出典: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-datazone-project.html
+  DataZoneProject:
+    Type: AWS::DataZone::Project
+    Properties:
+      Name: !Ref UnifiedStudioProjectName
+      Description: !Ref UnifiedStudioProjectDescription
+      DomainIdentifier: !Ref DomainId
+      ProjectProfileId: !GetAtt ProjectProfile.Id
+
+Outputs:
+  ProjectProfileId:
+    Description: Project profile ID
+    Value: !GetAtt ProjectProfile.Id
+
+  ProjectId:
+    Description: Unified Studio (DataZone) project ID
+    Value: !GetAtt DataZoneProject.Id
+    Export:
+      Name: !Sub '${ProjectName}-unified-studio-project-id'

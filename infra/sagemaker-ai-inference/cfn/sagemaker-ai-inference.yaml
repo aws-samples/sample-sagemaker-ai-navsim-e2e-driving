@@ -1,0 +1,76 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  SageMaker Real-time Inference Endpoint.
+  Deploys an inference endpoint from a model artifact trained by the ML Pipeline.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Resource naming prefix
+
+  ModelName:
+    Type: String
+    Description: Model identifier (e.g. navsim-ego-mlp, navsim-transfuser)
+
+  ModelDataUrl:
+    Type: String
+    Description: S3 URI of the repackaged model.tar.gz (including inference.py)
+
+  InstanceType:
+    Type: String
+    Default: ml.m5.large
+    Description: Endpoint instance type
+
+  InstanceCount:
+    Type: Number
+    Default: 1
+    Description: Number of endpoint instances
+
+  ContainerImage:
+    Type: String
+    Description: SageMaker inference container image URI
+
+  RoleArn:
+    Type: String
+    Description: SageMaker execution role ARN
+
+Resources:
+  InferenceModel:
+    Type: AWS::SageMaker::Model
+    Properties:
+      ModelName: !Sub "${ProjectName}-${ModelName}-model"
+      ExecutionRoleArn: !Ref RoleArn
+      PrimaryContainer:
+        Image: !Ref ContainerImage
+        ModelDataUrl: !Ref ModelDataUrl
+        Environment:
+          SAGEMAKER_PROGRAM: inference.py
+
+  EndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      EndpointConfigName: !Sub "${ProjectName}-${ModelName}-epc"
+      ProductionVariants:
+        - VariantName: AllTraffic
+          ModelName: !GetAtt InferenceModel.ModelName
+          InstanceType: !Ref InstanceType
+          InitialInstanceCount: !Ref InstanceCount
+          InitialVariantWeight: 1.0
+
+  Endpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointName: !Sub "${ProjectName}-${ModelName}-endpoint"
+      EndpointConfigName: !GetAtt EndpointConfig.EndpointConfigName
+
+Outputs:
+  EndpointName:
+    Description: SageMaker Endpoint name
+    Value: !GetAtt Endpoint.EndpointName
+
+  EndpointArn:
+    Description: SageMaker Endpoint ARN
+    Value: !Ref Endpoint

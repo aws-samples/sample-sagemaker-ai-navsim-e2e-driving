@@ -1,0 +1,11 @@
+# Transfuser の学習・評価に必要なパッケージ
+# navsim devkit はインストールしない (Python 3.9 依存関係の競合を回避)
+# PyTorch / torchvision / numpy は DLC にプリインストール済み
+mlflow>=3.0
+sagemaker-mlflow
+scikit-learn
+pandas
+boto3
+matplotlib
+timm
+opencv-python-headless

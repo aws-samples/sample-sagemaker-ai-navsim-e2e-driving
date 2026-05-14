@@ -1,0 +1,8 @@
+# Notebook から PyTorchProcessor で evaluate.py を直接実行する場合に必要。
+# Pipeline 実行時は source_dir を使わないため、この requirements.txt は参照されない。
+mlflow>=3.0
+sagemaker-mlflow
+scikit-learn
+pandas
+numpy
+pyarrow>=4.0.0,<16

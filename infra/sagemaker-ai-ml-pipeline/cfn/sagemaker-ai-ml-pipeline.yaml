@@ -1,0 +1,1230 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SageMaker AI ML Pipeline environment - Train, Model Registry, Evaluate architecture.
+  Includes S3 buckets, ECR repository, SageMaker AI Notebook, and IAM roles.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Project name used as prefix for resource naming
+
+  NotebookInstanceType:
+    Type: String
+    Default: ml.g4dn.2xlarge
+    Description: SageMaker AI Notebook instance type
+
+  NotebookIdleTimeoutMinutes:
+    Type: Number
+    Default: 60
+    MinValue: 5
+    Description: Minutes of idle time before the Notebook instance is automatically stopped
+
+  GitHubRepoUrl:
+    Type: String
+    Default: ''
+    Description: GitHub repository URL to clone into the notebook (optional)
+
+  GitHubUsername:
+    Type: String
+    Default: ''
+    Description: GitHub username for private repository authentication (optional)
+
+  GitHubSecretArn:
+    Type: String
+    Default: ''
+    Description: ARN of pre-existing Secrets Manager secret for GitHub credentials (created by deploy.sh)
+
+  # --- VPC 設定 ---
+  EnableVPC:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable VPC configuration for training/processing jobs
+
+  VpcId:
+    Type: String
+    Default: ''
+    Description: Existing VPC ID. Leave empty to create a new VPC (requires EnableVPC=true)
+
+  SubnetIds:
+    Type: String
+    Default: ''
+    Description: Comma-separated Subnet IDs. Required when VpcId is specified
+
+  SecurityGroupId:
+    Type: String
+    Default: ''
+    Description: Existing Security Group ID. Required when VpcId is specified
+
+  CreateVpcEndpoints:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create VPC Endpoints. Set false if existing VPC already has them
+
+  Boto3LayerArn:
+    Type: String
+    Default: ''
+    Description: ARN of Lambda Layer containing latest boto3 (created by deploy.sh)
+
+
+Conditions:
+  HasBoto3Layer: !Not [!Equals [!Ref Boto3LayerArn, '']]
+  DeployNotebook: !Equals ['true', 'true']  # Set to !Equals ['false', 'true'] to disable Notebook
+  HasGitHubRepo: !Not [!Equals [!Ref GitHubRepoUrl, '']]
+  HasGitHubAuth: !Not [!Equals [!Ref GitHubSecretArn, '']]
+  # --- VPC Conditions ---
+  IsVPCEnabled: !Equals [!Ref EnableVPC, 'true']
+  CreateNewVPC: !And
+    - !Condition IsVPCEnabled
+    - !Equals [!Ref VpcId, '']
+  ShouldCreateVpcEndpoints: !And
+    - !Condition IsVPCEnabled
+    - !Equals [!Ref CreateVpcEndpoints, 'true']
+  ShouldCreateS3GwEndpoint: !And
+    - !Condition CreateNewVPC
+    - !Equals [!Ref CreateVpcEndpoints, 'true']
+
+Resources:
+  # ============================================================
+  # S3 Buckets
+  # ============================================================
+  DatasetBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-dataset-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ModelArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-model-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  EvaluationArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-eval-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  MlflowArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-mlflow-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ============================================================
+  # S3 Bucket Policies (enforce HTTPS)
+  # ============================================================
+  DatasetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DatasetBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DatasetBucket.Arn
+              - !Sub '${DatasetBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  ModelArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ModelArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ModelArtifactBucket.Arn
+              - !Sub '${ModelArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  EvaluationArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EvaluationArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt EvaluationArtifactBucket.Arn
+              - !Sub '${EvaluationArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  MlflowArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MlflowArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt MlflowArtifactBucket.Arn
+              - !Sub '${MlflowArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # ============================================================
+  # ECR Repository
+  # ============================================================
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ProjectName}-container'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      EmptyOnDelete: true
+
+  # ============================================================
+  # IAM Roles
+  # ============================================================
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-sagemaker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DatasetBucket.Arn
+                  - !Sub '${DatasetBucket.Arn}/*'
+                  - !GetAtt ModelArtifactBucket.Arn
+                  - !Sub '${ModelArtifactBucket.Arn}/*'
+                  - !GetAtt EvaluationArtifactBucket.Arn
+                  - !Sub '${EvaluationArtifactBucket.Arn}/*'
+                  - !GetAtt MlflowArtifactBucket.Arn
+                  - !Sub '${MlflowArtifactBucket.Arn}/*'
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+        - PolicyName: ModelRegistryAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:CreateModelPackage
+                  - sagemaker:CreateModelPackageGroup
+                  - sagemaker:DescribeModelPackage
+                  - sagemaker:DescribeModelPackageGroup
+                  - sagemaker:ListModelPackages
+                  - sagemaker:UpdateModelPackage
+                Resource: '*'
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowModelAndInferenceProfileAccess
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListInferenceProfiles
+                Resource:
+                  - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:application-inference-profile/*'
+                  - 'arn:aws:bedrock:*::foundation-model/*'
+              - Sid: AllowMarketplaceSubscription
+                Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:CalledViaLast: bedrock.amazonaws.com
+        - PolicyName: MlflowAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker-mlflow:*
+                Resource:
+                  - !Sub 'arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:mlflow-app/${ProjectName}-mlflow'
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-sagemaker-*'
+        - PolicyName: CloudFormationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-*'
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sagemaker-ai-inference-*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-sagemaker-role'
+        - PolicyName: ServiceQuotasAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - servicequotas:GetServiceQuota
+                  - servicequotas:ListServiceQuotas
+                  - servicequotas:RequestServiceQuotaIncrease
+                  - servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota
+                Resource: '*'
+
+  # ============================================================
+  # Secrets Manager (GitHub PAT)
+  # Note: The secret is created by deploy.sh BEFORE stack deployment
+  # to avoid PAT exposure in CloudFormation event history.
+  # CFn only references the pre-existing secret by ARN.
+  # ============================================================
+
+  # ============================================================
+  # SageMaker AI Notebook Instance
+  # ============================================================
+  # ライフサイクルスクリプトは CloudFormation の !Sub で変数展開が必要なため
+  # インラインで記述している。
+  NotebookLifecycleConfig:
+    Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
+    Condition: DeployNotebook
+    Properties:
+      NotebookInstanceLifecycleConfigName: !Sub '${ProjectName}-notebook-lcc'
+      OnStart:
+        - Content:
+            Fn::Base64: !Sub |
+              #!/bin/bash
+              set -e
+
+              # ============================================================
+              # 0. Docker データルートの移動
+              # ============================================================
+              # SageMaker AI Notebook のルートボリューム (/) は容量が限られているため、
+              # Docker のデータディレクトリを /home/ec2-user/SageMaker 配下 (EBS) に移動する。
+              # これにより VolumeSizeInGB で確保した容量を Docker ビルドに使える。
+              DOCKER_DATA_ROOT="/home/ec2-user/SageMaker/.docker-data"
+              DOCKER_DAEMON_JSON="/etc/docker/daemon.json"
+
+              if [ ! -d "${!DOCKER_DATA_ROOT}" ]; then
+                  mkdir -p "${!DOCKER_DATA_ROOT}"
+              fi
+
+              # daemon.json が存在しない、または data-root が未設定の場合のみ変更
+              if ! grep -q "data-root" "${!DOCKER_DAEMON_JSON}" 2>/dev/null; then
+                  # 既存の daemon.json があればマージ、なければ新規作成
+                  if [ -f "${!DOCKER_DAEMON_JSON}" ]; then
+                      python3 -c "
+              import json
+              with open('${!DOCKER_DAEMON_JSON}') as f:
+                  data = json.load(f)
+              data['data-root'] = '${!DOCKER_DATA_ROOT}'
+              with open('${!DOCKER_DAEMON_JSON}', 'w') as f:
+                  json.dump(data, f, indent=2)
+              "
+                  else
+                      cat > "${!DOCKER_DAEMON_JSON}" << DOCKER_EOF
+              {
+                "data-root": "${!DOCKER_DATA_ROOT}"
+              }
+              DOCKER_EOF
+                  fi
+                  # Docker を再起動して新しいデータルートを適用
+                  systemctl restart docker
+                  echo "Docker data-root moved to ${!DOCKER_DATA_ROOT}"
+              else
+                  echo "Docker data-root already configured, skipping."
+              fi
+
+              # ============================================================
+              # 1. Jupyter 環境の修正
+              # ============================================================
+              # .bashrc の壊れた Environment Modules 初期化を修正
+              # Jupyter の ! コマンドで bash 起動時に switchml/module の
+              # syntax error が出る問題を解消する
+              BASHRC="/home/ec2-user/.bashrc"
+              if grep -q 'switchml\|MODULESHOME' "${!BASHRC}" 2>/dev/null; then
+                  sudo -u ec2-user sed -i \
+                    -e '/switchml/s/^/#/' \
+                    -e '/MODULESHOME/s/^/#/' \
+                    -e '/module()/s/^/#/' \
+                    "${!BASHRC}"
+                  echo "Fixed broken Environment Modules entries in .bashrc"
+              fi
+
+              # ============================================================
+              # 2. アイドル自動停止
+              # ============================================================
+              IDLE_TIME=$((${NotebookIdleTimeoutMinutes} * 60))
+
+              # autostop.py をインラインで作成
+              # 参考: https://github.com/aws-samples/amazon-sagemaker-notebook-instance-lifecycle-config-samples
+              cat > /autostop.py << 'AUTOSTOP_SCRIPT'
+              import requests, json, sys, getopt, boto3, urllib3
+              from datetime import datetime
+              urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+              idle = True
+              port = '8443'
+              time_val = None
+              opts, _ = getopt.getopt(sys.argv[1:], "t:p:", ["time=", "port="])
+              for opt, arg in opts:
+                  if opt in ("-t", "--time"): time_val = int(arg)
+                  if opt in ("-p", "--port"): port = str(arg)
+              if not time_val:
+                  print("Missing --time"); sys.exit(1)
+
+              def is_idle(last_activity):
+                  last = datetime.strptime(last_activity, "%Y-%m-%dT%H:%M:%S.%fz")
+                  return (datetime.now() - last).total_seconds() > time_val
+
+              def get_notebook_name():
+                  with open('/opt/ml/metadata/resource-metadata.json') as f:
+                      return json.load(f)['ResourceName']
+
+              def has_browser_connection(port):
+                  """ブラウザから JupyterLab への ESTABLISHED 接続があるか確認する。
+                  /proc/net/tcp6 (IPv6) と /proc/net/tcp (IPv4) を確認し、
+                  指定ポートへの接続数を返す。"""
+                  import socket, struct
+                  port_hex = format(int(port), '04X')
+                  count = 0
+                  for path in ['/proc/net/tcp6', '/proc/net/tcp']:
+                      try:
+                          with open(path) as f:
+                              for line in f.readlines()[1:]:
+                                  fields = line.split()
+                                  # local_address の下位 4 桁がポート番号
+                                  local_port = fields[1].split(':')[-1]
+                                  state = fields[3]
+                                  # state 01 = ESTABLISHED
+                                  if local_port == port_hex and state == '01':
+                                      count += 1
+                      except Exception:
+                          pass
+                  return count > 0
+
+              # ブラウザ接続がある場合は idle にしない
+              if has_browser_connection(port):
+                  print('Browser connection active - not idle')
+                  idle = False
+              else:
+                  # セッション (カーネル) のアイドル状態を確認
+                  response = requests.get('https://localhost:'+port+'/api/sessions', verify=False)
+                  data = response.json()
+                  if len(data) > 0:
+                      for nb in data:
+                          if nb['kernel']['execution_state'] != 'idle':
+                              idle = False
+                          elif not is_idle(nb['kernel']['last_activity']):
+                              idle = False
+
+              if idle:
+                  print('Stopping idle notebook')
+                  boto3.client('sagemaker').stop_notebook_instance(
+                      NotebookInstanceName=get_notebook_name()
+                  )
+              else:
+                  print('Notebook not idle')
+              AUTOSTOP_SCRIPT
+
+              # boto3 が使える Python を検出
+              CONDA_PYTHON_DIR=$(source /home/ec2-user/anaconda3/bin/activate /home/ec2-user/anaconda3/envs/JupyterSystemEnv && which python)
+              if $CONDA_PYTHON_DIR -c "import boto3" 2>/dev/null; then
+                  PYTHON_DIR=$CONDA_PYTHON_DIR
+              elif /usr/bin/python3 -c "import boto3" 2>/dev/null; then
+                  PYTHON_DIR='/usr/bin/python3'
+              else
+                  echo "No boto3 found. Exiting..."
+                  exit 1
+              fi
+
+              # cron ジョブを登録 (5 分ごとにアイドルチェック)
+              (crontab -l 2>/dev/null; echo "*/5 * * * * $PYTHON_DIR /autostop.py --time $IDLE_TIME --ignore-connections >> /var/log/autostop.log 2>&1") | crontab -
+
+              # ============================================================
+              # 3. Kiro CLI のインストールと設定
+              # ============================================================
+              echo "Installing Kiro CLI..."
+              sudo -u ec2-user bash -c 'curl -fsSL https://cli.kiro.dev/install | bash'
+
+              # ec2-user の PATH に .local/bin を追加
+              KIRO_PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+              BASHRC="/home/ec2-user/.bashrc"
+              if ! grep -qF '.local/bin' "${!BASHRC}" 2>/dev/null; then
+                  echo "${!KIRO_PATH_LINE}" >> "${!BASHRC}"
+              fi
+              echo "Kiro CLI installation complete."
+
+              # Kiro MCP サーバー設定
+              KIRO_SETTINGS_DIR="/home/ec2-user/.kiro/settings"
+              KIRO_MCP_JSON="${!KIRO_SETTINGS_DIR}/mcp.json"
+              sudo -u ec2-user mkdir -p "${!KIRO_SETTINGS_DIR}"
+              sudo -u ec2-user cat > "${!KIRO_MCP_JSON}" << 'KIRO_MCP_EOF'
+              {
+                "mcpServers": {
+                  "aws-knowledge-mcp-server": {
+                    "type": "http",
+                    "url": "https://knowledge-mcp.global.api.aws",
+                    "disabled": false,
+                    "disabledTools": [],
+                    "autoApprove": [
+                      "aws___search_documentation",
+                      "aws___read_documentation",
+                      "aws___recommend",
+                      "aws___get_regional_availability",
+                      "aws___list_regions"
+                    ]
+                  },
+                  "awslabs.aws-iac-mcp-server": {
+                    "command": "uvx",
+                    "args": ["awslabs.aws-iac-mcp-server@latest"],
+                    "env": {
+                      "FASTMCP_LOG_LEVEL": "ERROR"
+                    },
+                    "disabled": false,
+                    "autoApprove": [
+                      "validate_cloudformation_template",
+                      "check_cloudformation_template_compliance",
+                      "troubleshoot_cloudformation_deployment",
+                      "search_cloudformation_documentation",
+                      "search_cdk_documentation",
+                      "search_cdk_constructs",
+                      "get_cdk_best_practices",
+                      "read_iac_documentation_page"
+                    ]
+                  },
+                  "awslabs.aws-pricing-mcp-server": {
+                    "command": "uvx",
+                    "args": ["awslabs.aws-pricing-mcp-server@latest"],
+                    "env": {
+                      "FASTMCP_LOG_LEVEL": "ERROR"
+                    },
+                    "disabled": false,
+                    "autoApprove": [
+                      "get_products",
+                      "get_attribute_values",
+                      "get_pricing_service_codes",
+                      "get_pricing",
+                      "get_pricing_service_attributes",
+                      "get_pricing_attribute_values"
+                    ]
+                  }
+                }
+              }
+              KIRO_MCP_EOF
+              chown ec2-user:ec2-user "${!KIRO_MCP_JSON}"
+              echo "Kiro MCP settings configured."
+
+              # uvx がなければ uv をインストール
+              if ! sudo -u ec2-user bash -c 'command -v uvx' &>/dev/null; then
+                  echo "Installing uv..."
+                  sudo -u ec2-user bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+              fi
+
+              # ============================================================
+              # 4. Claude Code のインストールと設定
+              # ============================================================
+              echo "Installing Claude Code..."
+              sudo -u ec2-user bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+              echo "Claude Code installation complete."
+
+              # Claude Code の settings.json を生成
+              CLAUDE_DIR="/home/ec2-user/.claude"
+              CLAUDE_SETTINGS="${!CLAUDE_DIR}/settings.json"
+              sudo -u ec2-user mkdir -p "${!CLAUDE_DIR}"
+              sudo -u ec2-user cat > "${!CLAUDE_SETTINGS}" << 'CLAUDE_SETTINGS_EOF'
+              {
+                "env": {
+                  "CLAUDE_CODE_USE_BEDROCK": "1",
+                  "AWS_REGION": "us-east-1",
+                  "DISABLE_TELEMETRY": "1"
+                },
+                "permissions": {
+                  "deny": [
+                    "Bash(rm -rf *)",
+                    "Bash(rm -r *)",
+                    "Bash(sudo *)"
+                  ]
+                },
+                "language": "japanese"
+              }
+              CLAUDE_SETTINGS_EOF
+              chown ec2-user:ec2-user "${!CLAUDE_SETTINGS}"
+              echo "Claude Code settings.json created."
+
+              # ============================================================
+              # 5. リポジトリソースコードの配置 (GitHub 連携なしの場合)
+              # ============================================================
+              # GitHub 連携がない場合、deploy.sh が S3 にアップロードした
+              # リポジトリ全体を Notebook にダウンロードする。
+              # GitHub 連携ありの場合は CodeRepository 経由で起動時に clone されるため不要。
+              GITHUB_REPO_URL="${GitHubRepoUrl}"
+              if [ -z "${!GITHUB_REPO_URL}" ]; then
+                  REPO_DEST="/home/ec2-user/SageMaker/${ProjectName}"
+                  S3_REPO_SOURCE="s3://${DatasetBucket}/_repo-source/"
+
+                  echo "No GitHub repo configured. Syncing repository from S3..."
+                  sudo -u ec2-user mkdir -p "${!REPO_DEST}"
+                  sudo -u ec2-user aws s3 sync "${!S3_REPO_SOURCE}" "${!REPO_DEST}" --region "${AWS::Region}"
+                  echo "Repository synced to ${!REPO_DEST}"
+              else
+                  echo "GitHub repo configured. Skipping S3 repo sync."
+              fi
+
+  NotebookInstance:
+    Type: AWS::SageMaker::NotebookInstance
+    Condition: DeployNotebook
+    Properties:
+      NotebookInstanceName: !Sub '${ProjectName}-notebook'
+      InstanceType: !Ref NotebookInstanceType
+      PlatformIdentifier: notebook-al2023-v1
+      RoleArn: !GetAtt SageMakerExecutionRole.Arn
+      DirectInternetAccess: !If [IsVPCEnabled, Disabled, Enabled]
+      SubnetId: !If
+        - IsVPCEnabled
+        - !If [CreateNewVPC, !Ref PrivateSubnet1, !Select [0, !Split [',', !Ref SubnetIds]]]
+        - !Ref AWS::NoValue
+      SecurityGroupIds: !If
+        - IsVPCEnabled
+        - - !If [CreateNewVPC, !Ref TrainingSecurityGroup, !Ref SecurityGroupId]
+        - !Ref AWS::NoValue
+      VolumeSizeInGB: 1000
+      LifecycleConfigName: !GetAtt NotebookLifecycleConfig.NotebookInstanceLifecycleConfigName
+      DefaultCodeRepository: !If
+        - HasGitHubRepo
+        - !GetAtt GitHubCodeRepo.CodeRepositoryName
+        - !Ref AWS::NoValue
+
+  GitHubCodeRepo:
+    Type: AWS::SageMaker::CodeRepository
+    Condition: HasGitHubRepo
+    Properties:
+      CodeRepositoryName: !Sub '${ProjectName}'
+      GitConfig:
+        RepositoryUrl: !Ref GitHubRepoUrl
+        SecretArn: !If
+          - HasGitHubAuth
+          - !Ref GitHubSecretArn
+          - !Ref AWS::NoValue
+
+  # ============================================================
+  # SageMaker Model Package Group (Model Registry)
+  # ============================================================
+  ModelPackageGroup:
+    Type: AWS::SageMaker::ModelPackageGroup
+    Properties:
+      ModelPackageGroupName: !Sub '${ProjectName}-model-group'
+      ModelPackageGroupDescription: !Sub 'Model registry for ${ProjectName} ML pipeline'
+
+  # ============================================================
+  # MLflow App
+  # ============================================================
+  # ============================================================
+  # MLflow App (Custom Resource)
+  # ============================================================
+  # MLflow App は CFn ネイティブリソース未対応のため、Custom Resource で実装。
+  # create_mlflow_app / delete_mlflow_app API を Lambda 経由で呼び出す。
+  # boto3 Lambda Layer は deploy.sh で事前に作成し、ARN をパラメータで渡す。
+  MlflowAppFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-mlflow-app-cr'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 600
+      MemorySize: 256
+      Role: !GetAtt MlflowAppFunctionRole.Arn
+      Layers: !If
+        - HasBoto3Layer
+        - - !Ref Boto3LayerArn
+        - !Ref AWS::NoValue
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import time
+          from botocore.exceptions import ClientError
+
+          sm = boto3.client("sagemaker")
+
+          def handler(event, context):
+              request_type = event["RequestType"]
+              props = event["ResourceProperties"]
+              app_name = props["AppName"]
+              physical_id = event.get("PhysicalResourceId", f"mlflow-app-{app_name}")
+              print(f"RequestType={request_type}, AppName={app_name}")
+
+              try:
+                  if request_type == "Create":
+                      arn = _find_app_arn(app_name)
+                      if arn:
+                          print(f"App already exists: {arn}")
+                      else:
+                          resp = sm.create_mlflow_app(
+                              Name=app_name,
+                              ArtifactStoreUri=props["ArtifactStoreUri"],
+                              RoleArn=props["RoleArn"],
+                              ModelRegistrationMode="AutoModelRegistrationEnabled",
+                          )
+                          arn = resp.get("Arn") or resp.get("MlflowAppArn", "")
+                          if not arn:
+                              time.sleep(5)
+                              arn = _find_app_arn(app_name) or ""
+                          _wait_for_ready(arn)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Arn": arn}, physical_id)
+
+                  elif request_type == "Delete":
+                      arn = _find_app_arn(app_name)
+                      if arn:
+                          sm.delete_mlflow_app(Arn=arn)
+                          print(f"Delete initiated: {arn}")
+                      else:
+                          print(f"App {app_name} not found, skipping")
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+
+                  elif request_type == "Update":
+                      arn = _find_app_arn(app_name) or ""
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Arn": arn}, physical_id)
+
+              except Exception as e:
+                  print(f"ERROR: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)}, physical_id)
+
+          def _find_app_arn(name):
+              """Find app ARN by name via list API."""
+              try:
+                  for app in sm.list_mlflow_apps().get("Summaries", []):
+                      if app.get("Name") == name and app.get("Status") not in ("Deleted", "Deleting"):
+                          return app["Arn"]
+              except ClientError:
+                  pass
+              return None
+
+          def _wait_for_ready(arn, timeout=540):
+              deadline = time.time() + timeout
+              while time.time() < deadline:
+                  resp = sm.describe_mlflow_app(Arn=arn)
+                  status = resp.get("MlflowAppStatus") or resp.get("Status", "")
+                  print(f"Waiting: {status}")
+                  if status in ("Active", "Created"):
+                      return
+                  if "Fail" in status:
+                      raise Exception(f"MLflow App entered {status}")
+                  time.sleep(10)
+              raise TimeoutError(f"MLflow App not ready within {timeout}s")
+
+  MlflowAppFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MlflowAppManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:CreateMlflowApp
+                  - sagemaker:DescribeMlflowApp
+                  - sagemaker:DeleteMlflowApp
+                  - sagemaker:ListMlflowApps
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt SageMakerExecutionRole.Arn
+
+  MlflowApp:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt MlflowAppFunction.Arn
+      AppName: !Sub '${ProjectName}-mlflow'
+      ArtifactStoreUri: !Sub 's3://${MlflowArtifactBucket}'
+      RoleArn: !GetAtt SageMakerExecutionRole.Arn
+
+  # ============================================================
+  # VPC (Optional - Pattern B: 全コンポーネント閉域構成)
+  # ============================================================
+
+  # --- ネットワーク基盤 ---
+  TrainingVPC:
+    Type: AWS::EC2::VPC
+    Condition: CreateNewVPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vpc'
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-1'
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-2'
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      CidrBlock: 10.0.100.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-1'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      CidrBlock: 10.0.101.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-2'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: CreateNewVPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-igw'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Condition: CreateNewVPC
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateNewVPC
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-nat'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-public-rt'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNewVPC
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref TrainingVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-private-rt'
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNewVPC
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # --- セキュリティグループ ---
+  TrainingSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateNewVPC
+    Properties:
+      GroupDescription: !Sub '${ProjectName} training/notebook SG - allows inter-container communication and outbound access to AWS services'
+      VpcId: !Ref TrainingVPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic (required for SageMaker to reach AWS services)
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-sg'
+
+  TrainingSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateNewVPC
+    Properties:
+      GroupId: !Ref TrainingSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref TrainingSecurityGroup
+      Description: Allow all traffic between instances in the same security group (required for SageMaker distributed training)
+
+  # --- VPC Endpoints ---
+  VpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      GroupDescription: !Sub '${ProjectName} VPC Endpoint SG - allows HTTPS inbound from training SG for AWS service access'
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !If [CreateNewVPC, !Ref TrainingSecurityGroup, !Ref SecurityGroupId]
+          Description: HTTPS from training/notebook security group
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-vpce-sg'
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateS3GwEndpoint
+    Properties:
+      VpcId: !Ref TrainingVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  SageMakerApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sagemaker.api'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  MlflowEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'aws.sagemaker.${AWS::Region}.experiments'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  NotebookEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'aws.sagemaker.${AWS::Region}.notebook'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  StsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: ShouldCreateVpcEndpoints
+    Properties:
+      VpcId: !If [CreateNewVPC, !Ref TrainingVPC, !Ref VpcId]
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sts'
+      VpcEndpointType: Interface
+      SubnetIds: !If
+        - CreateNewVPC
+        - - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        - !Split [',', !Ref SubnetIds]
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+Outputs:
+  DatasetBucketName:
+    Description: S3 bucket for training and test datasets
+    Value: !Ref DatasetBucket
+
+  ModelArtifactBucketName:
+    Description: S3 bucket for model artifacts
+    Value: !Ref ModelArtifactBucket
+
+  EvaluationArtifactBucketName:
+    Description: S3 bucket for evaluation artifacts
+    Value: !Ref EvaluationArtifactBucket
+
+  ECRRepositoryUri:
+    Description: ECR repository URI for training containers
+    Value: !GetAtt ECRRepository.RepositoryUri
+
+  NotebookInstanceName:
+    Condition: DeployNotebook
+    Description: SageMaker AI Notebook instance name
+    Value: !GetAtt NotebookInstance.NotebookInstanceName
+
+  SageMakerRoleArn:
+    Description: IAM Role ARN for SageMaker execution
+    Value: !GetAtt SageMakerExecutionRole.Arn
+
+  ModelPackageGroupName:
+    Description: SageMaker Model Package Group name
+    Value: !Sub '${ProjectName}-model-group'
+
+  MlflowAppArn:
+    Description: MLflow App ARN
+    Value: !GetAtt MlflowApp.Arn
+
+  MlflowArtifactBucketName:
+    Description: S3 bucket for MLflow artifacts
+    Value: !Ref MlflowArtifactBucket
+
+  VpcSubnetIds:
+    Condition: IsVPCEnabled
+    Description: Subnet IDs for SageMaker training/processing jobs (comma-separated)
+    Value: !If
+      - CreateNewVPC
+      - !Join [',', [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
+      - !Ref SubnetIds
+
+  VpcSecurityGroupId:
+    Condition: IsVPCEnabled
+    Description: Security Group ID for SageMaker training/processing jobs
+    Value: !If [CreateNewVPC, !Ref TrainingSecurityGroup, !Ref SecurityGroupId]

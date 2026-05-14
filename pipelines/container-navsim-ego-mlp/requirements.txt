@@ -1,0 +1,11 @@
+# EgoStatusMLP の学習・評価に必要なパッケージ
+#
+# navsim devkit はインストールしない (Python 3.9 + numpy==1.23.4 のピン留めが
+# DLC の Python 3.11 + numpy 2.x と競合するため)
+# PyTorch / numpy / torchvision は DLC にプリインストール済み
+mlflow>=3.0
+sagemaker-mlflow
+scikit-learn
+pandas
+boto3
+matplotlib

@@ -1,0 +1,89 @@
+AWS SageMaker AI Pipeline for NAVSIM Autonomous Driving
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+**********************
+THIRD PARTY COMPONENTS
+**********************
+
+This software includes the following third-party components,
+used in accordance with their respective licenses.
+
+1. NAVSIM - https://github.com/autonomousvision/navsim
+   License: Apache License 2.0
+   Copyright: University of Tübingen, Tübingen AI Center, and contributors
+
+   The NAVSIM-related implementations in this repository
+   (container-navsim-ego-mlp, container-navsim-transfuser,
+   container-navsim-transfuser-lite) are based on the architectures
+   described in the NAVSIM papers.
+
+   container-navsim-transfuser contains code derived from the NAVSIM
+   repository with navsim/nuplan dependencies removed. The modified
+   files carry prominent notices stating the changes made (see file
+   headers in transfuser_backbone.py, transfuser_model.py,
+   transfuser_config.py, transfuser_loss.py).
+
+   container-navsim-ego-mlp and container-navsim-transfuser-lite are
+   independently written implementations inspired by the architectures
+   described in the NAVSIM papers.
+
+   The navsim devkit is not bundled or installed in this project.
+
+   References:
+   - Dauner, D., Hallgarten, M., Li, T., et al. "NAVSIM: Data-Driven
+     Non-Reactive Autonomous Vehicle Simulation and Benchmarking."
+     Advances in Neural Information Processing Systems (NeurIPS), 2024.
+   - Cao, W., Hallgarten, M., Li, T., et al. "Pseudo-Simulation for
+     Autonomous Driving." Conference on Robot Learning (CoRL), 2025.
+
+2. TransFuser - https://github.com/autonomousvision/transfuser
+   License: MIT License
+   Copyright: autonomousvision contributors
+
+   The Transfuser implementation in container-navsim-transfuser is
+   ported from the official NAVSIM Transfuser architecture with
+   navsim/nuplan dependencies removed. The Transfuser-Lite
+   implementation in container-navsim-transfuser-lite is
+   independently written and inspired by the architecture described
+   in the TransFuser paper.
+
+   Reference:
+   - Chitta, K., Prakash, A., Jaeger, B., et al. "TransFuser: Imitation
+     with Transformer-Based Sensor Fusion for Autonomous Driving."
+     IEEE Transactions on Pattern Analysis and Machine Intelligence
+     (PAMI), 2023.
+
+3. OpenScene - https://github.com/OpenDriveLab/OpenScene
+   License: Apache License 2.0 (code), CC BY-NC-SA 4.0 (data)
+   Copyright: OpenDriveLab contributors
+
+   This repository does not bundle or redistribute OpenScene data.
+   Users who download and use OpenScene data must comply with the
+   Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+   International License and the nuPlan Dataset License Agreement
+   for Non-Commercial Use. See https://www.nuscenes.org/terms-of-use
+   for details.
+
+4. nuPlan Dataset - https://www.nuscenes.org/nuplan
+   License: nuPlan Dataset License Agreement
+   Copyright: Motional, Inc.
+
+   This repository does not bundle or redistribute nuPlan data.
+   Users must agree to the nuPlan Dataset License Agreement before
+   downloading and using the data.
+
+**********************
+RUNTIME DEPENDENCIES
+**********************
+
+The following libraries are installed at runtime via pip and are
+not bundled in this repository.
+
+- PyTorch (https://pytorch.org/) - BSD-3-Clause License
+- scikit-learn (https://scikit-learn.org/) - BSD-3-Clause License
+- MLflow (https://mlflow.org/) - Apache License 2.0
+- pandas (https://pandas.pydata.org/) - BSD-3-Clause License
+- NumPy (https://numpy.org/) - BSD-3-Clause License
+- matplotlib (https://matplotlib.org/) - PSF-based License
+- boto3 (https://github.com/boto/boto3) - Apache License 2.0
+- SageMaker Python SDK (https://github.com/aws/sagemaker-python-sdk) - Apache License 2.0

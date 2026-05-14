@@ -1,0 +1,196 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  SageMaker Unified Studio foundation - DataZone Domain and IAM roles.
+  This stack creates the base infrastructure for Unified Studio (IAM-based domain).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Project name used as prefix for resource naming
+
+  DomainName:
+    Type: String
+    Default: sagemaker-ai-ml-pipeline
+    Description: Name of the Unified Studio (DataZone) domain
+
+  IdcInstanceArn:
+    Type: String
+    Default: ''
+    Description: >
+      IAM Identity Center (SSO) instance ARN. If provided, SSO authentication is enabled.
+      Leave empty to create a domain without SSO.
+
+Conditions:
+  HasIdcInstance: !Not [!Equals [!Ref IdcInstanceArn, '']]
+
+Resources:
+  # ============================================================
+  # IAM Role - Domain Execution Role
+  # ============================================================
+  # Unified Studio (DataZone) ドメインの実行ロール。
+  # ドメイン作成時に必須。DataZone および関連サービスがこのロールを引き受けて
+  # リソースのプロビジョニングやアクセス管理を行う。
+  #
+  # 出典: https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/setup-iam-based-domains.html
+  DomainExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-unified-studio-domain-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - datazone.amazonaws.com
+                - sagemaker.amazonaws.com
+                - glue.amazonaws.com
+                - bedrock.amazonaws.com
+                - scheduler.amazonaws.com
+                - lakeformation.amazonaws.com
+                - airflow-serverless.amazonaws.com
+                - athena.amazonaws.com
+                - redshift.amazonaws.com
+                - emr-serverless.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+              - sts:SetContext
+              - sts:SetSourceIdentity
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SageMakerStudioAdminIAMDefaultExecutionPolicy
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+      Policies:
+        # ロールが自身を他のサービスに渡すためのポリシー
+        # 出典: https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/setup-iam-based-domains.html
+        - PolicyName: PassRoleSelf
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PassRoleSelf
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-unified-studio-domain-role'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - sagemaker.amazonaws.com
+                      - glue.amazonaws.com
+                      - lakeformation.amazonaws.com
+                      - bedrock.amazonaws.com
+                      - scheduler.amazonaws.com
+                      - airflow-serverless.amazonaws.com
+                      - athena.amazonaws.com
+                      - redshift.amazonaws.com
+                      - emr-serverless.amazonaws.com
+        # DataZone ドメイン管理に必要な追加権限
+        - PolicyName: DataZoneDomainManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DataZoneAccess
+                Effect: Allow
+                Action:
+                  - datazone:*
+                Resource: '*'
+              - Sid: RAMAccess
+                Effect: Allow
+                Action:
+                  - ram:CreateResourceShare
+                  - ram:DeleteResourceShare
+                  - ram:GetResourceShares
+                  - ram:AssociateResourceShare
+                  - ram:DisassociateResourceShare
+                Resource: '*'
+              - Sid: SageMakerAccess
+                Effect: Allow
+                Action:
+                  - sagemaker:List*
+                  - sagemaker:Describe*
+                  - sagemaker:Search
+                Resource: '*'
+
+  # ============================================================
+  # IAM Role - Domain Service Role
+  # ============================================================
+  # V2 ドメイン作成時に必須のサービスロール。
+  # DataZone サービスがドメインの管理操作を行う際に使用する。
+  # DomainExecutionRole とは別のロール。
+  #
+  # 出典: 既存ドメインの設定から確認 (AmazonSageMakerDomainService ロール)
+  DomainServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-unified-studio-service-role'
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: datazone.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/SageMakerStudioDomainServiceRolePolicy
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ============================================================
+  # DataZone Domain (Unified Studio)
+  # ============================================================
+  # DomainVersion: V2 は Unified Studio 対応のドメインバージョン。
+  # V1 は従来の DataZone ドメイン。
+  # ServiceRole は V2 ドメインで必須。
+  #
+  # 出典: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-datazone-domain.html
+  DataZoneDomain:
+    Type: AWS::DataZone::Domain
+    Properties:
+      Name: !Ref DomainName
+      Description: !Sub '${ProjectName} Unified Studio domain'
+      DomainExecutionRole: !GetAtt DomainExecutionRole.Arn
+      ServiceRole: !GetAtt DomainServiceRole.Arn
+      DomainVersion: V2
+      SingleSignOn: !If
+        - HasIdcInstance
+        - Type: IAM_IDC
+          UserAssignment: AUTOMATIC
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  DomainId:
+    Description: Unified Studio (DataZone) domain ID
+    Value: !GetAtt DataZoneDomain.Id
+    Export:
+      Name: !Sub '${ProjectName}-unified-studio-domain-id'
+
+  DomainArn:
+    Description: Unified Studio (DataZone) domain ARN
+    Value: !GetAtt DataZoneDomain.Arn
+
+  DomainPortalUrl:
+    Description: Unified Studio portal URL
+    Value: !GetAtt DataZoneDomain.PortalUrl
+
+  DomainExecutionRoleArn:
+    Description: Domain execution role ARN
+    Value: !GetAtt DomainExecutionRole.Arn
+
+  DomainServiceRoleArn:
+    Description: Domain service role ARN
+    Value: !GetAtt DomainServiceRole.Arn
