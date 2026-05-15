@@ -305,7 +305,7 @@ flowchart LR
     class S3Model,DLC storage
 ```
 
-デモアプリは NAVSIM EgoStatusMLP と Transfuser に対応しており、予測された将来の軌跡を 2D プロットで可視化します。Transfuser はカメラ・LiDAR 入力をダミーとした EgoStatus のみの簡易推論です。
+デモアプリは NAVSIM EgoStatusMLP に対応しており、予測された将来の軌跡を 2D プロットで可視化します。
 
 ```mermaid
 sequenceDiagram
