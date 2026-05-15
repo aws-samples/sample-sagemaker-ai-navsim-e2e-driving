@@ -116,5 +116,5 @@ URL=$(aws sagemaker create-presigned-notebook-instance-url \
 #        → https://<name>.notebook.<region>.sagemaker.aws/lab?authToken=...
 JUPYTERLAB_URL="${URL/\?//lab?}"
 print_hyperlink "${JUPYTERLAB_URL}" "JupyterLab を開く"
-open "${JUPYTERLAB_URL}"
+open_url "${JUPYTERLAB_URL}"
 printf "${YELLOW}※ ブラウザセッションは 4 時間有効です。${RESET}\n"

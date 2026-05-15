@@ -39,5 +39,5 @@ URL=$(aws sagemaker create-presigned-mlflow-app-url \
   --output text \
  )
 print_hyperlink "${URL}" "MLflow UI を開く"
-open "${URL}"
+open_url "${URL}"
 printf "${YELLOW}※ ブラウザセッションは 4 時間有効です。${RESET}\n"

@@ -484,8 +484,9 @@ flowchart TD
 
 ## 前提条件
 
-インフラのデプロイにはローカルマシンに以下のツールが必要です。
+インフラのデプロイにはローカルマシンに以下が必要です。
 
+- OS: macOS, Linux, または Windows (WSL2)
 - AWS CLI v2
 - Python 3.10 以上
 - SageMaker Python SDK (`pip install sagemaker`)

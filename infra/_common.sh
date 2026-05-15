@@ -53,6 +53,18 @@ print_hyperlink() {
   printf " ${BOLD}${GREEN}<<<${RESET}\n"
 }
 
+# --- クロスプラットフォーム URL オープン関数 ---
+# macOS では自動でブラウザを開く。それ以外は URL を表示する。
+# 引数: $1 = URL
+open_url() {
+  local url="$1"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    open "$url"
+  else
+    printf "${YELLOW}ブラウザで開いてください: %s${RESET}\n" "$url"
+  fi
+}
+
 # --- 確認プロンプト関数 ---
 # AUTO_APPROVE=true の場合はスキップ。それ以外は y/N で確認する。
 # 引数: $1 = 確認メッセージ

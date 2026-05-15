@@ -478,8 +478,9 @@ The main files and directories in this repository.
 
 ## Prerequisites
 
-The following tools are required on your local machine for infrastructure deployment.
+The following are required on your local machine for infrastructure deployment.
 
+- OS: macOS, Linux, or Windows (WSL2)
 - AWS CLI v2
 - Python 3.10+
 - SageMaker Python SDK (`pip install sagemaker`)
